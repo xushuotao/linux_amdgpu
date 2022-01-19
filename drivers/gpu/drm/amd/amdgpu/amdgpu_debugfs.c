@@ -37,6 +37,8 @@
 #include "amdgpu_fw_attestation.h"
 #include "amdgpu_umr.h"
 
+#include "amdgpu_reset.h"
+
 #if defined(CONFIG_DEBUG_FS)
 
 /**
@@ -1284,7 +1286,7 @@ static int amdgpu_debugfs_test_ib_show(struct seq_file *m, void *unused)
 	}
 
 	/* Avoid accidently unparking the sched thread during GPU reset */
-	r = down_write_killable(&adev->reset_sem);
+	r = down_write_killable(&adev->reset_domain->sem);
 	if (r)
 		return r;
 
@@ -1313,7 +1315,7 @@ static int amdgpu_debugfs_test_ib_show(struct seq_file *m, void *unused)
 		kthread_unpark(ring->sched.thread);
 	}
 
-	up_write(&adev->reset_sem);
+	up_write(&adev->reset_domain->sem);
 
 	pm_runtime_mark_last_busy(dev->dev);
 	pm_runtime_put_autosuspend(dev->dev);
@@ -1543,7 +1545,7 @@ static int amdgpu_debugfs_ib_preempt(void *data, u64 val)
 		return -ENOMEM;
 
 	/* Avoid accidently unparking the sched thread during GPU reset */
-	r = down_read_killable(&adev->reset_sem);
+	r = down_read_killable(&adev->reset_domain->sem);
 	if (r)
 		goto pro_end;
 
@@ -1586,7 +1588,7 @@ failure:
 	/* restart the scheduler */
 	kthread_unpark(ring->sched.thread);
 
-	up_read(&adev->reset_sem);
+	up_read(&adev->reset_domain->sem);
 
 	ttm_bo_unlock_delayed_workqueue(&adev->mman.bdev, resched);
 
@@ -1649,23 +1651,23 @@ static ssize_t amdgpu_reset_dump_register_list_read(struct file *f,
 		return 0;
 
 	memset(reg_offset, 0, 12);
-	ret = down_read_killable(&adev->reset_sem);
+	ret = down_read_killable(&adev->reset_domain->sem);
 	if (ret)
 		return ret;
 
 	for (i = 0; i < adev->num_regs; i++) {
 		sprintf(reg_offset, "0x%x\n", adev->reset_dump_reg_list[i]);
-		up_read(&adev->reset_sem);
+		up_read(&adev->reset_domain->sem);
 		if (copy_to_user(buf + len, reg_offset, strlen(reg_offset)))
 			return -EFAULT;
 
 		len += strlen(reg_offset);
-		ret = down_read_killable(&adev->reset_sem);
+		ret = down_read_killable(&adev->reset_domain->sem);
 		if (ret)
 			return ret;
 	}
 
-	up_read(&adev->reset_sem);
+	up_read(&adev->reset_domain->sem);
 	*pos += len;
 
 	return len;
@@ -1702,13 +1704,13 @@ static ssize_t amdgpu_reset_dump_register_list_write(struct file *f,
 		i++;
 	} while (len < size);
 
-	ret = down_write_killable(&adev->reset_sem);
+	ret = down_write_killable(&adev->reset_domain->sem);
 	if (ret)
 		goto error_free;
 
 	swap(adev->reset_dump_reg_list, tmp);
 	adev->num_regs = i;
-	up_write(&adev->reset_sem);
+	up_write(&adev->reset_domain->sem);
 	ret = size;
 
 error_free:
