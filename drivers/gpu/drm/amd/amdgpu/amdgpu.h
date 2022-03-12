@@ -1016,6 +1016,9 @@ struct amdgpu_device {
 	int                             num_regs;
 
 	struct amdgpu_reset_domain	*reset_domain;
+
+	bool                            scpm_enabled;
+	uint32_t                        scpm_status;
 };
 
 static inline struct amdgpu_device *drm_to_adev(struct drm_device *ddev)
