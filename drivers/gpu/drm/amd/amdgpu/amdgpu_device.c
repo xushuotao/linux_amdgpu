@@ -4004,6 +4004,7 @@ void amdgpu_device_fini_hw(struct amdgpu_device *adev)
 	if (drm_dev_is_unplugged(adev_to_drm(adev)))
 		amdgpu_device_unmap_mmio(adev);
 
+	amdgpu_amdkfd_resume_processes();
 }
 
 void amdgpu_device_fini_sw(struct amdgpu_device *adev)
