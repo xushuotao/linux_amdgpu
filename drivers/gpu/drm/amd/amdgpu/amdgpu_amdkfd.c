@@ -213,6 +213,11 @@ int amdgpu_amdkfd_resume(struct amdgpu_device *adev, bool run_pm)
 	return r;
 }
 
+int amdgpu_amdkfd_resume_processes(void)
+{
+	return kgd2kfd_resume_processes();
+}
+
 int amdgpu_amdkfd_pre_reset(struct amdgpu_device *adev)
 {
 	int r = 0;

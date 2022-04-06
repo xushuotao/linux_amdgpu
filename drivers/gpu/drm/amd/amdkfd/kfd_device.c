@@ -714,6 +714,19 @@ int kgd2kfd_resume(struct kfd_dev *kfd, bool run_pm)
 	return ret;
 }
 
+/* for non-runtime resume only */
+int kgd2kfd_resume_processes(void)
+{
+	int count;
+
+	count = atomic_dec_return(&kfd_locked);
+	WARN_ONCE(count < 0, "KFD suspend / resume ref. error");
+	if (count == 0)
+		return kfd_resume_all_processes();
+
+	return 0;
+}
+
 int kgd2kfd_resume_iommu(struct kfd_dev *kfd)
 {
 	int err = 0;
