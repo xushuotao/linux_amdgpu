@@ -681,8 +681,8 @@ void kgd2kfd_suspend(struct kfd_dev *kfd, bool run_pm)
 	if (!kfd->init_complete)
 		return;
 
-	/* for runtime suspend, skip locking kfd */
-	if (!run_pm) {
+	/* for runtime suspend or device hotplug-out, skip locking kfd */
+	if (!run_pm && !drm_dev_is_unplugged(kfd->ddev)) {
 		/* For first KFD device suspend all the KFD processes */
 		if (atomic_inc_return(&kfd_locked) == 1)
 			kfd_suspend_all_processes();
