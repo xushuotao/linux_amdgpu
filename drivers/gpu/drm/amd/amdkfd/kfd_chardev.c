@@ -127,6 +127,9 @@ static int kfd_open(struct inode *inode, struct file *filep)
 	if (IS_ERR(process))
 		return PTR_ERR(process);
 
+	/* dev_dbg(kfd_device, "kfd opened by process pasid = %x!\n", process->pasid); */
+	dev_info(kfd_device, "kfd opened by process pasid = %x!\n", process->pasid);
+
 	if (kfd_is_locked()) {
 		dev_dbg(kfd_device, "kfd is locked!\n"
 				"process %d unreferenced", process->pasid);
@@ -147,8 +150,15 @@ static int kfd_release(struct inode *inode, struct file *filep)
 {
 	struct kfd_process *process = filep->private_data;
 
-	if (process)
+	if (process) {
+		pr_info("%s pasid = 0x%08x, refcnt = %d\n", __func__, process->pasid, kref_read(&process->ref));
 		kfd_unref_process(process);
+	}
+
+	/* while ( kref_read(&process->ref) ){ */
+	/* 	pr_info("%s pasid = 0x%08x, refcnt = %d trying to put mn\n", __func__, process->pasid, kref_read(&process->ref)); */
+	/* 	mmu_notifier_put(&process->mmu_notifier); */
+	/* } */
 
 	return 0;
 }
@@ -157,6 +167,7 @@ static int kfd_ioctl_get_version(struct file *filep, struct kfd_process *p,
 					void *data)
 {
 	struct kfd_ioctl_get_version_args *args = data;
+	pr_info("%s entered\n", __func__);
 
 	args->major_version = KFD_IOCTL_MAJOR_VERSION;
 	args->minor_version = KFD_IOCTL_MINOR_VERSION;
@@ -909,12 +920,18 @@ static int kfd_ioctl_acquire_vm(struct file *filep, struct kfd_process *p,
 	struct file *drm_file;
 	int ret;
 
+	pr_info("%s entered\n", __func__);
+	
 	drm_file = fget(args->drm_fd);
+   	pr_info("%s got drm_file = %p\n", __func__, drm_file);
 	if (!drm_file)
 		return -EINVAL;
 
 	mutex_lock(&p->mutex);
 	pdd = kfd_process_device_data_by_id(p, args->gpu_id);
+	
+	pr_info("%s, drm_dev open_count = %d, drm_file = %p\n", __func__, atomic_read(&(pdd->dev->ddev->open_count)), pdd->drm_file);
+
 	if (!pdd) {
 		ret = -EINVAL;
 		goto err_pdd;
@@ -2471,6 +2488,20 @@ exit:
 	return ret;
 }
 
+static int criu_process_release(struct file *filep,
+			struct kfd_process *p,
+			struct kfd_ioctl_criu_args *args)
+{
+
+	return kfd_process_release(p);
+
+	/* mutex_unlock(&kfd_processes_mutex); */
+	/* synchronize_srcu(&kfd_processes_srcu); */
+	/* kfd_process_free_notifier will trigger the cleanup */
+	/* mmu_notifier_put(&process->mmu_notifier); */
+}
+
+
 static int criu_process_info(struct file *filep,
 				struct kfd_process *p,
 				struct kfd_ioctl_criu_args *args)
@@ -2517,7 +2548,7 @@ static int kfd_ioctl_criu(struct file *filep, struct kfd_process *p, void *data)
 	struct kfd_ioctl_criu_args *args = data;
 	int ret;
 
-	dev_dbg(kfd_device, "CRIU operation: %d\n", args->op);
+	dev_dbg(kfd_device, "CRIU operation: %d for pasid = %x\n", args->op, p->pasid);
 	switch (args->op) {
 	case KFD_CRIU_OP_PROCESS_INFO:
 		ret = criu_process_info(filep, p, args);
@@ -2534,6 +2565,9 @@ static int kfd_ioctl_criu(struct file *filep, struct kfd_process *p, void *data)
 	case KFD_CRIU_OP_RESUME:
 		ret = criu_resume(filep, p, args);
 		break;
+	case KFD_CRIU_OP_PROCESS_RELEASE:
+		ret = criu_process_release(filep, p, args);
+		break;
 	default:
 		dev_dbg(kfd_device, "Unsupported CRIU operation:%d\n", args->op);
 		ret = -EINVAL;
@@ -2545,6 +2579,126 @@ static int kfd_ioctl_criu(struct file *filep, struct kfd_process *p, void *data)
 
 	return ret;
 }
+
+
+static int checkpoint(void) {
+	struct kfd_dev *kfd = NULL;
+	int i;
+	pr_info("checkpoint is called\n");
+	kfd_sigcpt_all_processes();
+	/* for (i = 0; kfd_topology_enum_kfd_devices(i, &kfd) == 0; i++) */
+	/* 	if (kfd) { */
+	/* 		kgd2kfd_suspend(kfd, true); */
+	/* 	} */
+
+	return 0;
+}
+
+static int rollback(void){
+	struct kfd_dev *kfd = NULL;
+	int i;
+	pr_info("rollback is called\n");
+	/* for (i = 0; kfd_topology_enum_kfd_devices(i, &kfd) == 0; i++) */
+	/* 	if (kfd) { */
+	/* 		kgd2kfd_resume(kfd, true); */
+	/* 	} */
+
+	return 0;
+}
+
+static int kfd_get_all_pasids(struct kfd_process *curr, struct kfd_ioctl_snapshot_args *args){
+	struct kfd_process *p;
+	unsigned int temp;
+	u32* pasids, *pasids_org;
+	int idx = 0, ret = 0;
+	
+	pr_info("%s pasids cnt = %u\n", __func__, args->pasids_cnt);
+	pasids = pasids_org = kvmalloc_array(args->pasids_cnt, sizeof(*pasids), GFP_KERNEL);
+
+	if ( !pasids ) {
+		ret = -ENOMEM;
+		goto exit;
+	}
+	
+	idx = srcu_read_lock(&kfd_processes_srcu);
+	hash_for_each_rcu(kfd_processes_table, temp, p, kfd_processes) {
+		if ( p == curr ) continue;
+		if ( pasids-pasids_org > args->pasids_cnt)
+			break;
+		*pasids = p->pasid;
+		pr_info("pasids[%lu] = %x\n", pasids-pasids_org, *pasids);
+		pasids++;
+	}
+	srcu_read_unlock(&kfd_processes_srcu, idx);
+
+	ret = copy_to_user((void __user *) args->pasids_arr,
+					   pasids_org,
+					   (args->pasids_cnt*sizeof(*pasids)));
+
+	pr_info("copy_to_user return with ret = %d\n", ret);
+	
+	if (ret)
+		ret = -EFAULT;
+	
+ exit:
+	kvfree(pasids_org);
+
+	pr_info("%s exit code = %d\n", __func__, ret);
+	return ret;
+}
+
+static int kfd_ioctl_snapshot(struct file *filep, struct kfd_process *p_curr, void *data)
+{
+	struct kfd_ioctl_snapshot_args *args = data;
+	int ret = 0;
+
+	/* struct kfd_process *p_target = kfd_lookup_process_by_pasid(args->pasid); */
+	
+	pr_info("KFD Snapshot operation: %d\n", args->op);
+	
+	switch (args->op) {
+	/* case KFD_SNAPSHOT_OP_GET_PASIDS_CNT: */
+	/* 	args->pasids_cnt = atomic_read(&kfd_processes_cnt) - 1; */
+	/* 	break; */
+	/* case KFD_SNAPSHOT_OP_GET_PASIDS: */
+	/* 	ret = kfd_get_all_pasids(p_curr, args); */
+	/* 	break; */
+	/* case KFD_SNAPSHOT_OP_PROCESS_INFO: */
+	/* 	ret = criu_process_info(filep, p_target, &(args->cr_args)); */
+	/* 	break; */
+	/* case KFD_SNAPSHOT_OP_CHECKPOINT: */
+	/* 	ret = criu_checkpoint(filep, p_target, &(args->cr_args)); */
+	/* 	break; */
+	/* case KFD_SNAPSHOT_OP_UNPAUSE: */
+	/* 	ret = criu_unpause(filep, p_target, &(args->cr_args)); */
+	/* 	break; */
+	/* case KFD_SNAPSHOT_OP_RESTORE: */
+	/* 	ret = criu_restore(filep, p_target, &(args->cr_args)); */
+	/* 	break; */
+	/* case KFD_SNAPSHOT_OP_RESUME: */
+	/* 	ret = criu_resume(filep, p_target, &(args->cr_args)); */
+	/* 	break; */
+	case KFD_SNAPSHOT_OP_CHECKPOINT:
+		ret = checkpoint();
+		break;
+	case KFD_SNAPSHOT_OP_ROLLBACK:
+		ret = rollback();
+		break;
+	default:
+		dev_dbg(kfd_device, "Unsupported GPU Snapshot operation:%d\n", args->op);
+		ret = -EINVAL;
+		break;
+	}
+
+	/* if ( p_target ) */
+	/* 	kfd_unref_process(p_target); */
+
+	if (ret)
+		dev_dbg(kfd_device, "CRIU operation:%d err:%d\n", args->op, ret);
+
+	return ret;
+}
+
 
 #define AMDKFD_IOCTL_DEF(ioctl, _func, _flags) \
 	[_IOC_NR(ioctl)] = {.cmd = ioctl, .func = _func, .flags = _flags, \
@@ -2653,6 +2807,10 @@ static const struct amdkfd_ioctl_desc amdkfd_ioctls[] = {
 	AMDKFD_IOCTL_DEF(AMDKFD_IOC_CRIU_OP,
 			kfd_ioctl_criu, KFD_IOC_FLAG_CHECKPOINT_RESTORE),
 
+	AMDKFD_IOCTL_DEF(AMDKFD_IOC_SNAPSHOT_OP,
+			kfd_ioctl_snapshot, 0),
+
+
 };
 
 #define AMDKFD_CORE_IOCTL_COUNT	ARRAY_SIZE(amdkfd_ioctls)
@@ -2683,10 +2841,12 @@ static long kfd_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 			asize = amdkfd_size;
 
 		cmd = ioctl->cmd;
+
 	} else
 		goto err_i1;
 
-	dev_dbg(kfd_device, "ioctl cmd 0x%x (#0x%x), arg 0x%lx\n", cmd, nr, arg);
+	/* dev_dbg(kfd_device, "ioctl cmd 0x%x (%s) (#0x%x), arg 0x%lx\n", cmd, ioctl->name, nr, arg); */
+	dev_info(kfd_device, "ioctl cmd 0x%x (%s) (#0x%x), arg 0x%lx\n", cmd, ioctl->name, nr, arg);
 
 	/* Get the process struct from the filep. Only the process
 	 * that opened /dev/kfd can use the file descriptor. Child
@@ -2702,7 +2862,7 @@ static long kfd_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 
 	if (process->lead_thread != current->group_leader
 	    && !ptrace_attached) {
-		dev_dbg(kfd_device, "Using KFD FD in wrong process\n");
+		dev_info(kfd_device, "Using KFD FD in wrong process\n");
 		retcode = -EBADF;
 		goto err_i1;
 	}
@@ -2760,14 +2920,14 @@ static long kfd_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 
 err_i1:
 	if (!ioctl)
-		dev_dbg(kfd_device, "invalid ioctl: pid=%d, cmd=0x%02x, nr=0x%02x\n",
+		dev_info(kfd_device, "invalid ioctl: pid=%d, cmd=0x%02x, nr=0x%02x\n",
 			  task_pid_nr(current), cmd, nr);
 
 	if (kdata != stack_kdata)
 		kfree(kdata);
 
 	if (retcode)
-		dev_dbg(kfd_device, "ioctl cmd (#0x%x), arg 0x%lx, ret = %d\n",
+		dev_info(kfd_device, "ioctl cmd (#0x%x), arg 0x%lx, ret = %d\n",
 				nr, arg, retcode);
 
 	return retcode;
@@ -2784,8 +2944,12 @@ static int kfd_mmio_mmap(struct kfd_dev *dev, struct kfd_process *process,
 
 	address = dev->adev->rmmio_remap.bus_addr;
 
-	vma->vm_flags |= VM_IO | VM_DONTCOPY | VM_DONTEXPAND | VM_NORESERVE |
+	/* vma->vm_flags |= VM_IO | VM_DONTCOPY | VM_DONTEXPAND | VM_NORESERVE | */
+	/* 			VM_DONTDUMP | VM_PFNMAP; */
+
+	vma->vm_flags |= VM_IO |  VM_DONTEXPAND | VM_NORESERVE |
 				VM_DONTDUMP | VM_PFNMAP;
+
 
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
@@ -2813,6 +2977,8 @@ static int kfd_mmap(struct file *filp, struct vm_area_struct *vma)
 	unsigned long mmap_offset;
 	unsigned int gpu_id;
 
+	pr_debug("%s entered\n", __func__);
+
 	process = kfd_get_process(current);
 	if (IS_ERR(process))
 		return PTR_ERR(process);
@@ -2821,6 +2987,7 @@ static int kfd_mmap(struct file *filp, struct vm_area_struct *vma)
 	gpu_id = KFD_MMAP_GET_GPU_ID(mmap_offset);
 	if (gpu_id)
 		dev = kfd_device_by_id(gpu_id);
+
 
 	switch (mmap_offset & KFD_MMAP_TYPE_MASK) {
 	case KFD_MMAP_TYPE_DOORBELL:

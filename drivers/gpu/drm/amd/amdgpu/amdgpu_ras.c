@@ -1509,7 +1509,7 @@ static int amdgpu_ras_fs_fini(struct amdgpu_device *adev)
 		}
 	}
 
-	amdgpu_ras_sysfs_remove_all(adev);
+	/* amdgpu_ras_sysfs_remove_all(adev); */
 	return 0;
 }
 /* ras fs end */
@@ -2486,7 +2486,7 @@ void amdgpu_ras_block_late_fini(struct amdgpu_device *adev,
 	if (!ras_block)
 		return;
 
-	amdgpu_ras_sysfs_remove(adev, ras_block);
+	/* amdgpu_ras_sysfs_remove(adev, ras_block); */
 
 	ras_obj = container_of(ras_block, struct amdgpu_ras_block_object, ras_comm);
 	if (ras_obj->ras_cb)
@@ -2588,6 +2588,10 @@ int amdgpu_ras_pre_fini(struct amdgpu_device *adev)
 	/* Need disable ras on all IPs here before ip [hw/sw]fini */
 	amdgpu_ras_disable_all_features(adev, 0);
 	amdgpu_ras_recovery_fini(adev);
+
+	/* amdgpu_ras_remove_sysfs */
+	amdgpu_ras_sysfs_remove_all(adev);
+
 	return 0;
 }
 

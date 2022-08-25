@@ -36,6 +36,7 @@
 #include <linux/pm_runtime.h>
 #include "amdgpu_amdkfd.h"
 #include "amdgpu.h"
+#include <linux/sched/signal.h>
 
 struct mm_struct;
 
@@ -52,6 +53,8 @@ DEFINE_HASHTABLE(kfd_processes_table, KFD_PROCESS_TABLE_SIZE);
 static DEFINE_MUTEX(kfd_processes_mutex);
 
 DEFINE_SRCU(kfd_processes_srcu);
+
+atomic_t kfd_processes_cnt = ATOMIC_INIT(0);
 
 /* For process termination handling */
 static struct workqueue_struct *kfd_process_wq;
@@ -920,9 +923,35 @@ static struct kfd_process *find_process(const struct task_struct *thread,
 	return p;
 }
 
-void kfd_unref_process(struct kfd_process *p)
+void kfd_unref_process_k(struct kfd_process *p)
 {
 	kref_put(&p->ref, kfd_process_ref_release);
+}
+
+void func_special(struct kfd_process *p, char const * caller_name )
+{
+    pr_info( "kfd_unref_process was called from %s, refcount = %d", caller_name, kref_read(&p->ref) );
+    kfd_unref_process_k(p);
+}
+
+#define kfd_unref_process(proc) func_special(proc, __func__)
+
+static void kfd_process_notifier_release(struct mmu_notifier *mn,
+										 struct mm_struct *mm);
+
+int kfd_process_release(struct kfd_process *process){
+	pr_info("%s entered\n", __func__);
+	pr_info("%s pasid = 0x%08x, refcnt = %d trying to put mn\n", __func__, process->pasid, kref_read(&process->ref));
+
+	kfd_process_notifier_release(&process->mmu_notifier, process->mm);
+	
+	kfd_unref_process(process);
+
+	while ( kref_read(&process->ref) >= 1 ) {
+		pr_info("%s pasid = 0x%08x, refcnt = %d unref kfd_process to zero\n", __func__, process->pasid, kref_read(&process->ref));
+		kfd_unref_process(process);
+	}
+	return 0;
 }
 
 /* This increments the process->ref counter. */
@@ -1020,8 +1049,14 @@ static void kfd_process_destroy_pdds(struct kfd_process *p)
 	for (i = 0; i < p->n_pdds; i++) {
 		struct kfd_process_device *pdd = p->pdds[i];
 
-		pr_debug("Releasing pdd (topology id %d) for process (pasid 0x%x)\n",
+		pr_info("Releasing pdd (topology id %d) for process (pasid 0x%x)\n",
 				pdd->dev->id, p->pasid);
+
+		/* pr_info("Releasing pdd (topology id %d) for process (pasid 0x%x)\n", */
+		/* 		pdd->dev->id, p->pasid); */
+
+		pr_info("drm_dev open_count = %d, drm_file = %p\n", atomic_read(&(pdd->dev->ddev->open_count)), pdd->drm_file);
+
 
 		kfd_process_device_destroy_cwsr_dgpu(pdd);
 		kfd_process_device_destroy_ib_mem(pdd);
@@ -1031,6 +1066,9 @@ static void kfd_process_destroy_pdds(struct kfd_process *p)
 					pdd->dev->adev, pdd->drm_priv);
 			fput(pdd->drm_file);
 		}
+
+		pr_info("drm_dev after open_count = %d, drm_file = %p\n", atomic_read(&(pdd->dev->ddev->open_count)), pdd->drm_file);
+
 
 		if (pdd->qpd.cwsr_kaddr && !pdd->qpd.cwsr_base)
 			free_pages((unsigned long)pdd->qpd.cwsr_kaddr,
@@ -1111,6 +1149,8 @@ static void kfd_process_wq_release(struct work_struct *work)
 	struct kfd_process *p = container_of(work, struct kfd_process,
 					     release_work);
 
+	pr_info("%s, doing the work of process release of pasid = %x\n", __func__, p->pasid);
+
 	kfd_process_remove_sysfs(p);
 	kfd_iommu_unbind_process(p);
 
@@ -1129,11 +1169,17 @@ static void kfd_process_wq_release(struct work_struct *work)
 	put_task_struct(p->lead_thread);
 
 	kfree(p);
+	atomic_dec(&kfd_processes_cnt);
+
+	pr_info("%s, finshed the work of process release of pasid = %x\n", __func__, p->pasid);
+
 }
 
 static void kfd_process_ref_release(struct kref *ref)
 {
 	struct kfd_process *p = container_of(ref, struct kfd_process, ref);
+
+	pr_info("%s, last unref triggers release of pasid = %x\n", __func__, p->pasid);
 
 	INIT_WORK(&p->release_work, kfd_process_wq_release);
 	queue_work(kfd_process_wq, &p->release_work);
@@ -1158,6 +1204,8 @@ static void kfd_process_notifier_release(struct mmu_notifier *mn,
 					struct mm_struct *mm)
 {
 	struct kfd_process *p;
+
+	pr_info("%s is called\n", __func__);
 
 	/*
 	 * The kfd_process structure can not be free because the
@@ -1191,6 +1239,8 @@ static void kfd_process_notifier_release(struct mmu_notifier *mn,
 	mutex_unlock(&p->mutex);
 
 	mmu_notifier_put(&p->mmu_notifier);
+	pr_info("%s is done\n", __func__);
+
 }
 
 static const struct mmu_notifier_ops kfd_process_mmu_notifier_ops = {
@@ -1347,6 +1397,7 @@ bool kfd_process_xnack_mode(struct kfd_process *p, bool supported)
 	return true;
 }
 
+
 /*
  * On return the kfd_process is fully operational and will be freed when the
  * mm is released
@@ -1411,6 +1462,7 @@ static struct kfd_process *create_process(const struct task_struct *thread)
 
 	get_task_struct(process->lead_thread);
 
+	atomic_inc(&kfd_processes_cnt);
 	return process;
 
 err_register_notifier:
@@ -1717,6 +1769,8 @@ int kfd_process_evict_queues(struct kfd_process *p)
 	int i;
 	unsigned int n_evicted = 0;
 
+	pr_debug("%s(%s,%d) entered\n",__func__,__FILE__,__LINE__);
+
 	for (i = 0; i < p->n_pdds; i++) {
 		struct kfd_process_device *pdd = p->pdds[i];
 
@@ -1900,6 +1954,7 @@ void kfd_suspend_all_processes(void)
 	srcu_read_unlock(&kfd_processes_srcu, idx);
 }
 
+
 int kfd_resume_all_processes(void)
 {
 	struct kfd_process *p;
@@ -1916,6 +1971,42 @@ int kfd_resume_all_processes(void)
 	srcu_read_unlock(&kfd_processes_srcu, idx);
 	return ret;
 }
+
+#define SIGCPT    44
+
+void kfd_sigcpt_all_processes(void)
+{
+	struct kfd_process *p;
+	unsigned int temp;
+	
+	struct kernel_siginfo info;
+	struct task_struct *task = NULL;
+	/* pr_info("Shared IRQ: Interrupt Occurred"); */
+    int idx = srcu_read_lock(&kfd_processes_srcu);
+    //Sending signal to app
+    memset(&info, 0, sizeof(struct kernel_siginfo));
+    info.si_signo = SIGCPT;
+    info.si_code = SI_QUEUE;
+    info.si_int = 1;
+
+
+	WARN(debug_evictions, "Evicting all processes");
+	hash_for_each_rcu(kfd_processes_table, temp, p, kfd_processes) {
+		task = p->lead_thread;
+		if ( task == current ) continue;
+        pr_info("Sending signal to app, pasid = 0x%08x\n", p->pasid);
+
+		/* if(send_sig_info(SIGTSTP, &info, task) < 0) { */
+        /*     pr_info("Unable to send signal\n"); */
+        /* } */
+
+        if(send_sig_info(SIGCPT, &info, task) < 0) {
+            pr_info("Unable to send signal\n");
+        }
+	}
+	srcu_read_unlock(&kfd_processes_srcu, idx);
+}
+
 
 int kfd_reserved_mem_mmap(struct kfd_dev *dev, struct kfd_process *process,
 			  struct vm_area_struct *vma)
@@ -1940,7 +2031,9 @@ int kfd_reserved_mem_mmap(struct kfd_dev *dev, struct kfd_process *process,
 		return -ENOMEM;
 	}
 
-	vma->vm_flags |= VM_IO | VM_DONTCOPY | VM_DONTEXPAND
+	/* vma->vm_flags |= VM_IO | VM_DONTCOPY | VM_DONTEXPAND */
+	/* 	| VM_NORESERVE | VM_DONTDUMP | VM_PFNMAP; */
+	vma->vm_flags |= VM_IO | VM_DONTEXPAND
 		| VM_NORESERVE | VM_DONTDUMP | VM_PFNMAP;
 	/* Mapping pages to user process */
 	return remap_pfn_range(vma, vma->vm_start,

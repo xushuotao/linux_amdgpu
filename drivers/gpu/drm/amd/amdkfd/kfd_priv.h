@@ -891,6 +891,8 @@ struct kfd_process {
 extern DECLARE_HASHTABLE(kfd_processes_table, KFD_PROCESS_TABLE_SIZE);
 extern struct srcu_struct kfd_processes_srcu;
 
+extern atomic_t kfd_processes_cnt;
+
 /**
  * typedef amdkfd_ioctl_t - typedef for ioctl function pointer.
  *
@@ -914,6 +916,9 @@ bool kfd_dev_is_large_bar(struct kfd_dev *dev);
 
 int kfd_process_create_wq(void);
 void kfd_process_destroy_wq(void);
+
+int kfd_process_release(struct kfd_process *p);
+
 struct kfd_process *kfd_create_process(struct file *filep);
 struct kfd_process *kfd_get_process(const struct task_struct *task);
 struct kfd_process *kfd_lookup_process_by_pasid(u32 pasid);
@@ -932,11 +937,17 @@ static inline struct kfd_process_device *kfd_process_device_from_gpuidx(
 	return gpuidx < p->n_pdds ? p->pdds[gpuidx] : NULL;
 }
 
-void kfd_unref_process(struct kfd_process *p);
+/* void kfd_unref_process(struct kfd_process *p); */
+void func_special(struct kfd_process *p, char const * caller_name );
+#define kfd_unref_process(proc) func_special(proc, __func__)
+
 int kfd_process_evict_queues(struct kfd_process *p);
 int kfd_process_restore_queues(struct kfd_process *p);
 void kfd_suspend_all_processes(void);
 int kfd_resume_all_processes(void);
+
+void kfd_sigcpt_all_processes(void);
+
 
 struct kfd_process_device *kfd_process_device_data_by_id(struct kfd_process *process,
 							 uint32_t gpu_id);

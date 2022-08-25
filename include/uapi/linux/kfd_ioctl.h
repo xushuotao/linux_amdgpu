@@ -196,6 +196,8 @@ struct kfd_ioctl_dbg_wave_control_args {
 	__u32 buf_size_in_bytes;	/*including gpu_id and buf_size */
 };
 
+#define KFD_INVALID_FD 0xffffffff
+
 /* Matching HSA_EVENTTYPE */
 #define KFD_IOC_EVENT_SIGNAL			0
 #define KFD_IOC_EVENT_NODECHANGE		1
@@ -495,6 +497,7 @@ enum kfd_criu_op {
 	KFD_CRIU_OP_UNPAUSE,
 	KFD_CRIU_OP_RESTORE,
 	KFD_CRIU_OP_RESUME,
+	KFD_CRIU_OP_PROCESS_RELEASE,
 };
 
 /**
@@ -545,6 +548,65 @@ struct kfd_criu_bo_bucket {
 };
 
 /* CRIU IOCTLs - END */
+/**************************************************************************************************/
+
+/**************************************************************************************************
+ * SNAPSHOT IOCTLs (Snapshot and rollback IOCTLs)
+ *
+ * When take a snapshot of the GPUs,
+ *
+ *
+ * When rollback to snapshot
+ *
+ * 1. RESTORE op to restore process contents
+ * 2. RESUME op to start the process
+ *
+ */
+
+enum kfd_snapshot_op {
+  	KFD_SNAPSHOT_OP_GET_PASIDS_CNT,
+	KFD_SNAPSHOT_OP_GET_PASIDS,
+
+	/* inherented from criu_ops */
+	KFD_SNAPSHOT_OP_PROCESS_INFO,
+	KFD_SNAPSHOT_OP_CHECKPOINT,
+	KFD_SNAPSHOT_OP_UNPAUSE,
+	KFD_SNAPSHOT_OP_RESTORE,
+	KFD_SNAPSHOT_OP_RESUME,
+
+	/* KFD_SNAPSHOT_OP_CHECKPOINT, */
+	KFD_SNAPSHOT_OP_ROLLBACK,
+};
+
+/**
+ * kfd_ioctl_criu_args - Arguments perform CRIU operation
+ * @devices:		[in/out] User pointer to memory location for devices information.
+ * 			This is an array of type kfd_criu_device_bucket.
+ * @bos:		[in/out] User pointer to memory location for BOs information
+ * 			This is an array of type kfd_criu_bo_bucket.
+ * @priv_data:		[in/out] User pointer to memory location for private data
+ * @priv_data_size:	[in/out] Size of priv_data in bytes
+ * @num_devices:	[in/out] Number of GPUs used by process. Size of @devices array.
+ * @num_bos		[in/out] Number of BOs used by process. Size of @bos array.
+ * @num_objects:	[in/out] Number of objects used by process. Objects are opaque to
+ *				 user application.
+ * @pid:		[in/out] PID of the process being checkpointed
+ * @op			[in] Type of operation (kfd_criu_op)
+ *
+ * Return: 0 on success, -errno on failure
+ */
+struct kfd_ioctl_snapshot_args {
+	__u32 op;
+
+	__u32 pasids_cnt;	/* Used during ops: OP_GET_PASIDS_CNT */
+	__u64 pasids_arr;	/* Used during ops: OP_GET_PASIDS */
+
+	/* the following is used when dump and restore GPU tasks */
+	__u32 pasid; 
+	struct kfd_ioctl_criu_args cr_args;
+};
+
+/* SNAPSHOT IOCTLs - END */
 /**************************************************************************************************/
 
 /* Register offset inside the remapped mmio page
@@ -823,8 +885,11 @@ struct kfd_ioctl_set_xnack_mode_args {
 
 #define AMDKFD_IOC_CRIU_OP			\
 		AMDKFD_IOWR(0x22, struct kfd_ioctl_criu_args)
+	
+#define AMDKFD_IOC_SNAPSHOT_OP			\
+		AMDKFD_IOWR(0x23, struct kfd_ioctl_snapshot_args)
 
 #define AMDKFD_COMMAND_START		0x01
-#define AMDKFD_COMMAND_END		0x23
+#define AMDKFD_COMMAND_END		0x24
 
 #endif
