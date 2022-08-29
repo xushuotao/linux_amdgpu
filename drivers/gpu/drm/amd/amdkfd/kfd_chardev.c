@@ -2581,11 +2581,26 @@ static int kfd_ioctl_criu(struct file *filep, struct kfd_process *p, void *data)
 }
 
 
+
+static int gpu_swap(void) {
+	struct kfd_dev *kfd = NULL;
+	int i;
+	pr_info("checkpoint is called\n");
+	kfd_sigkfd_all_processes(GPU_HOTSWAP);
+	/* for (i = 0; kfd_topology_enum_kfd_devices(i, &kfd) == 0; i++) */
+	/* 	if (kfd) { */
+	/* 		kgd2kfd_suspend(kfd, true); */
+	/* 	} */
+
+	return 0;
+}
+
+
 static int checkpoint(void) {
 	struct kfd_dev *kfd = NULL;
 	int i;
 	pr_info("checkpoint is called\n");
-	kfd_sigcpt_all_processes();
+	kfd_sigkfd_all_processes(KFD_SNAPSHOT);
 	/* for (i = 0; kfd_topology_enum_kfd_devices(i, &kfd) == 0; i++) */
 	/* 	if (kfd) { */
 	/* 		kgd2kfd_suspend(kfd, true); */
@@ -2598,6 +2613,7 @@ static int rollback(void){
 	struct kfd_dev *kfd = NULL;
 	int i;
 	pr_info("rollback is called\n");
+	kfd_sigkfd_all_processes(KFD_ROLLBACK);
 	/* for (i = 0; kfd_topology_enum_kfd_devices(i, &kfd) == 0; i++) */
 	/* 	if (kfd) { */
 	/* 		kgd2kfd_resume(kfd, true); */
@@ -2606,7 +2622,7 @@ static int rollback(void){
 	return 0;
 }
 
-static int kfd_get_all_pasids(struct kfd_process *curr, struct kfd_ioctl_snapshot_args *args){
+static int kfd_get_all_pasids(struct kfd_process *curr, struct kfd_ioctl_disaggregate_args *args){
 	struct kfd_process *p;
 	unsigned int temp;
 	u32* pasids, *pasids_org;
@@ -2647,42 +2663,45 @@ static int kfd_get_all_pasids(struct kfd_process *curr, struct kfd_ioctl_snapsho
 	return ret;
 }
 
-static int kfd_ioctl_snapshot(struct file *filep, struct kfd_process *p_curr, void *data)
+static int kfd_ioctl_disaggregate(struct file *filep, struct kfd_process *p_curr, void *data)
 {
-	struct kfd_ioctl_snapshot_args *args = data;
+	struct kfd_ioctl_disaggregate_args *args = data;
 	int ret = 0;
 
 	/* struct kfd_process *p_target = kfd_lookup_process_by_pasid(args->pasid); */
 	
-	pr_info("KFD Snapshot operation: %d\n", args->op);
+	pr_info("KFD Disaggregate operation: %d\n", args->op);
 	
 	switch (args->op) {
-	/* case KFD_SNAPSHOT_OP_GET_PASIDS_CNT: */
+	/* case KFD_DISAGGREGATE_OP_GET_PASIDS_CNT: */
 	/* 	args->pasids_cnt = atomic_read(&kfd_processes_cnt) - 1; */
 	/* 	break; */
-	/* case KFD_SNAPSHOT_OP_GET_PASIDS: */
+	/* case KFD_DISAGGREGATE_OP_GET_PASIDS: */
 	/* 	ret = kfd_get_all_pasids(p_curr, args); */
 	/* 	break; */
-	/* case KFD_SNAPSHOT_OP_PROCESS_INFO: */
+	/* case KFD_DISAGGREGATE_OP_PROCESS_INFO: */
 	/* 	ret = criu_process_info(filep, p_target, &(args->cr_args)); */
 	/* 	break; */
-	/* case KFD_SNAPSHOT_OP_CHECKPOINT: */
+	/* case KFD_DISAGGREGATE_OP_CHECKPOINT: */
 	/* 	ret = criu_checkpoint(filep, p_target, &(args->cr_args)); */
 	/* 	break; */
-	/* case KFD_SNAPSHOT_OP_UNPAUSE: */
+	/* case KFD_DISAGGREGATE_OP_UNPAUSE: */
 	/* 	ret = criu_unpause(filep, p_target, &(args->cr_args)); */
 	/* 	break; */
-	/* case KFD_SNAPSHOT_OP_RESTORE: */
+	/* case KFD_DISAGGREGATE_OP_RESTORE: */
 	/* 	ret = criu_restore(filep, p_target, &(args->cr_args)); */
 	/* 	break; */
-	/* case KFD_SNAPSHOT_OP_RESUME: */
+	/* case KFD_DISAGGREGATE_OP_RESUME: */
 	/* 	ret = criu_resume(filep, p_target, &(args->cr_args)); */
 	/* 	break; */
-	case KFD_SNAPSHOT_OP_CHECKPOINT:
-		ret = checkpoint();
+	case KFD_DISAGGREGATE_OP_GPUSWAP:
+		ret = kfd_sigkfd_all_processes(GPU_HOTSWAP);
 		break;
-	case KFD_SNAPSHOT_OP_ROLLBACK:
-		ret = rollback();
+	case KFD_DISAGGREGATE_OP_SNAPSHOT:
+		ret = kfd_sigkfd_all_processes(KFD_SNAPSHOT);
+		break;
+	case KFD_DISAGGREGATE_OP_ROLLBACK:
+		ret = kfd_sigkfd_all_processes(KFD_ROLLBACK);
 		break;
 	default:
 		dev_dbg(kfd_device, "Unsupported GPU Snapshot operation:%d\n", args->op);
@@ -2807,8 +2826,8 @@ static const struct amdkfd_ioctl_desc amdkfd_ioctls[] = {
 	AMDKFD_IOCTL_DEF(AMDKFD_IOC_CRIU_OP,
 			kfd_ioctl_criu, KFD_IOC_FLAG_CHECKPOINT_RESTORE),
 
-	AMDKFD_IOCTL_DEF(AMDKFD_IOC_SNAPSHOT_OP,
-			kfd_ioctl_snapshot, 0),
+	AMDKFD_IOCTL_DEF(AMDKFD_IOC_DISAGGREGATE_OP,
+			kfd_ioctl_disaggregate, 0),
 
 
 };

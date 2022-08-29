@@ -497,7 +497,7 @@ enum kfd_criu_op {
 	KFD_CRIU_OP_UNPAUSE,
 	KFD_CRIU_OP_RESTORE,
 	KFD_CRIU_OP_RESUME,
-	KFD_CRIU_OP_PROCESS_RELEASE,
+	KFD_CRIU_OP_PROCESS_RELEASE, /*this is newly added for KFD process clean up before GPU hotplug-out*/
 };
 
 /**
@@ -550,54 +550,62 @@ struct kfd_criu_bo_bucket {
 /* CRIU IOCTLs - END */
 /**************************************************************************************************/
 
+
 /**************************************************************************************************
- * SNAPSHOT IOCTLs (Snapshot and rollback IOCTLs)
+ * Disagregate IOCTLs (IOCTLs for disaggregated GPUs)
  *
- * When take a snapshot of the GPUs,
+ * Defines some of the key functionalities for disaggregated GPUs via
+ * PCIe switch network.
  *
+ * Key scenarios: 
+ * 1. GPU device hotwap/GPU job live migration
+ * 2. GPU job checkopint/restore for reliable GPU driver to tolerate
+ *    PCIe switch network failures.
  *
- * When rollback to snapshot
- *
- * 1. RESTORE op to restore process contents
- * 2. RESUME op to start the process
- *
+ * Comments: Some of the key technologies, in particular to GPU job
+ * checkpoint/resource, are reclaimed from KFD CRIU work
  */
 
-enum kfd_snapshot_op {
-  	KFD_SNAPSHOT_OP_GET_PASIDS_CNT,
-	KFD_SNAPSHOT_OP_GET_PASIDS,
+enum kfd_disaggregate_op {
+  	KFD_DISAGGREGATE_OP_GET_PASIDS_CNT,
+	KFD_DISAGGREGATE_OP_GET_PASIDS,
 
 	/* inherented from criu_ops */
-	KFD_SNAPSHOT_OP_PROCESS_INFO,
-	KFD_SNAPSHOT_OP_CHECKPOINT,
-	KFD_SNAPSHOT_OP_UNPAUSE,
-	KFD_SNAPSHOT_OP_RESTORE,
-	KFD_SNAPSHOT_OP_RESUME,
+	KFD_DISAGGREGATE_OP_PROCESS_INFO,
+	KFD_DISAGGREGATE_OP_CHECKPOINT,
+	KFD_DISAGGREGATE_OP_UNPAUSE,
+	KFD_DISAGGREGATE_OP_RESTORE,
+	KFD_DISAGGREGATE_OP_RESUME,
 
-	/* KFD_SNAPSHOT_OP_CHECKPOINT, */
-	KFD_SNAPSHOT_OP_ROLLBACK,
+	KFD_DISAGGREGATE_OP_GPUSWAP,  /* HOT swap a GPU device */
+	KFD_DISAGGREGATE_OP_SNAPSHOT, /* Snapshot GPU jobs and its associated CPU process */
+	KFD_DISAGGREGATE_OP_ROLLBACK, /* Restore GPU job and CPU process to a previous snapshot if any */
+};
+
+enum sigkfd_op {
+	GPU_HOTSWAP,
+	KFD_SNAPSHOT,
+	KFD_ROLLBACK,
 };
 
 /**
- * kfd_ioctl_criu_args - Arguments perform CRIU operation
- * @devices:		[in/out] User pointer to memory location for devices information.
- * 			This is an array of type kfd_criu_device_bucket.
- * @bos:		[in/out] User pointer to memory location for BOs information
- * 			This is an array of type kfd_criu_bo_bucket.
- * @priv_data:		[in/out] User pointer to memory location for private data
- * @priv_data_size:	[in/out] Size of priv_data in bytes
- * @num_devices:	[in/out] Number of GPUs used by process. Size of @devices array.
- * @num_bos		[in/out] Number of BOs used by process. Size of @bos array.
- * @num_objects:	[in/out] Number of objects used by process. Objects are opaque to
- *				 user application.
- * @pid:		[in/out] PID of the process being checkpointed
- * @op			[in] Type of operation (kfd_criu_op)
+ * kfd_ioctl_disaggregate_args - Arguments perform CRIU operation
+ * @op			[in] Type of operation (kfd_disaggregate_op)
  *
+ * @pasids_cnt:		[out] number of pasids/user-space processes that is attached to this KFD
+ * @pasid_arr:		[out] array of pasids
+ *
+ * @pasid:		[in] target pasid for operating CRIU operation
+ * @cr_args:	[in/out] Arguments for performing CRIU operatiion
+
  * Return: 0 on success, -errno on failure
  */
-struct kfd_ioctl_snapshot_args {
+
+
+struct kfd_ioctl_disaggregate_args {
 	__u32 op;
 
+	/* the following arguments are currently unused */
 	__u32 pasids_cnt;	/* Used during ops: OP_GET_PASIDS_CNT */
 	__u64 pasids_arr;	/* Used during ops: OP_GET_PASIDS */
 
@@ -606,8 +614,9 @@ struct kfd_ioctl_snapshot_args {
 	struct kfd_ioctl_criu_args cr_args;
 };
 
-/* SNAPSHOT IOCTLs - END */
+/* DISAGGREGATE IOCTLs - END */
 /**************************************************************************************************/
+
 
 /* Register offset inside the remapped mmio page
  */
@@ -886,8 +895,8 @@ struct kfd_ioctl_set_xnack_mode_args {
 #define AMDKFD_IOC_CRIU_OP			\
 		AMDKFD_IOWR(0x22, struct kfd_ioctl_criu_args)
 	
-#define AMDKFD_IOC_SNAPSHOT_OP			\
-		AMDKFD_IOWR(0x23, struct kfd_ioctl_snapshot_args)
+#define AMDKFD_IOC_DISAGGREGATE_OP			\
+		AMDKFD_IOWR(0x23, struct kfd_ioctl_disaggregate_args)
 
 #define AMDKFD_COMMAND_START		0x01
 #define AMDKFD_COMMAND_END		0x24

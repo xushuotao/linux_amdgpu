@@ -1972,12 +1972,14 @@ int kfd_resume_all_processes(void)
 	return ret;
 }
 
-#define SIGCPT    44
+#define SIGKFD    SIGUSR1
 
-void kfd_sigcpt_all_processes(void)
+
+int kfd_sigkfd_all_processes(enum sigkfd_op kfd_op)
 {
 	struct kfd_process *p;
 	unsigned int temp;
+	int ret = 0;
 	
 	struct kernel_siginfo info;
 	struct task_struct *task = NULL;
@@ -1985,9 +1987,9 @@ void kfd_sigcpt_all_processes(void)
     int idx = srcu_read_lock(&kfd_processes_srcu);
     //Sending signal to app
     memset(&info, 0, sizeof(struct kernel_siginfo));
-    info.si_signo = SIGCPT;
+    info.si_signo = SIGKFD;
     info.si_code = SI_QUEUE;
-    info.si_int = 1;
+    info.si_int = kfd_op;
 
 
 	WARN(debug_evictions, "Evicting all processes");
@@ -1996,15 +1998,13 @@ void kfd_sigcpt_all_processes(void)
 		if ( task == current ) continue;
         pr_info("Sending signal to app, pasid = 0x%08x\n", p->pasid);
 
-		/* if(send_sig_info(SIGTSTP, &info, task) < 0) { */
-        /*     pr_info("Unable to send signal\n"); */
-        /* } */
-
-        if(send_sig_info(SIGCPT, &info, task) < 0) {
+        if( (ret = send_sig_info(SIGKFD, &info, task)) < 0) {
             pr_info("Unable to send signal\n");
         }
 	}
 	srcu_read_unlock(&kfd_processes_srcu, idx);
+
+	return ret;
 }
 
 

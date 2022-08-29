@@ -946,7 +946,7 @@ int kfd_process_restore_queues(struct kfd_process *p);
 void kfd_suspend_all_processes(void);
 int kfd_resume_all_processes(void);
 
-void kfd_sigcpt_all_processes(void);
+int kfd_sigkfd_all_processes(enum sigkfd_op op);
 
 
 struct kfd_process_device *kfd_process_device_data_by_id(struct kfd_process *process,
